@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <opencv2/opencv.hpp>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -9,20 +10,28 @@ struct BoundingBox {
     int x, y, width, height;
 };
 
-// Function to receive bounding boxes from Python
-std::vector<BoundingBox> receiveData(SOCKET sock) {
+// Function to receive raw frames from Python
+cv::Mat receiveFrame(SOCKET sock) {
+    std::vector<char> buffer(1024*1024); // Adjust size as needed
+    int bytesReceived = recv(sock, buffer.data(), buffer.size(), 0);
+    std::vector<uchar> data(buffer.begin(), buffer.begin() + bytesReceived);
+    cv::Mat frame = cv::imdecode(data, cv::IMREAD_COLOR);
+    return frame;
+}
+
+// Perform object detection using OpenCV
+std::vector<BoundingBox> detectObjects(const cv::Mat& frame) {
+    cv::Mat gray, edges;
+    cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    cv::Canny(gray, edges, 50, 150);
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(edges, contours, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+
     std::vector<BoundingBox> boxes;
-    char buffer[16]; // 4 integers * 4 bytes each
-
-    while (true) {
-        int bytesReceived = recv(sock, buffer, sizeof(buffer), 0);
-        if (bytesReceived <= 0) break; // Break if no more data is received
-
-        BoundingBox box;
-        memcpy(&box, buffer, sizeof(BoundingBox));
-        boxes.push_back(box);
+    for (const auto& cnt : contours) {
+        cv::Rect rect = cv::boundingRect(cnt);
+        boxes.push_back({ rect.x, rect.y, rect.width, rect.height });
     }
-
     return boxes;
 }
 
@@ -65,7 +74,8 @@ int main() {
     std::cout << "Connected to Python application." << std::endl;
 
     while (true) {
-        std::vector<BoundingBox> boxes = receiveData(clientSocket);
+        cv::Mat frame = receiveFrame(clientSocket);
+        std::vector<BoundingBox> boxes = detectObjects(frame);
         sendDataToUnity(boxes);
     }
 
@@ -75,3 +85,4 @@ int main() {
 
     return 0;
 }
+
